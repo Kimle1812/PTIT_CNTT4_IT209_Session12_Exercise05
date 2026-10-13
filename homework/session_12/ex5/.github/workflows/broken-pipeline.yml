@@ -1,0 +1,91 @@
+name: CI/CD Pipeline - Fixed & Verified
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # ==========================================================
+  # Job 1: Kiểm thử và đóng gói ứng dụng Gradle
+  # [LỖI 1 ĐÃ SỬA]: Thêm 'chmod +x gradlew' để tránh Permission Denied
+  # ==========================================================
+  test:
+    name: Gradle Test & Verification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout mã nguồn
+        uses: actions/checkout@v4
+
+      - name: Thiết lập môi trường Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      # SỬA LỖI 1 (Permission Denied): Cấp quyền thực thi cho Gradle Wrapper trên Linux Runner
+      - name: Cấp quyền thực thi cho Gradle Wrapper (Fix Error 1)
+        run: chmod +x gradlew
+
+      - name: Chạy kiểm thử tự động (Gradle Test)
+        run: ./gradlew test --no-daemon
+
+      - name: Đóng gói sản phẩm JAR (Build & Assemble)
+        run: ./gradlew assemble --no-daemon
+
+  # ==========================================================
+  # Job 2: Đóng gói Docker Image và phát hành lên GHCR
+  # Ràng buộc: Chỉ chạy khi Job test hoàn thành thành công
+  # [LỖI 2 ĐÃ SỬA]: Sửa lại tên biến Secret thành REGISTRY_TOKEN
+  # [LỖI 3 ĐÃ SỬA]: Cấu hình context: . và file: ./Dockerfile
+  # ==========================================================
+  docker-build:
+    name: Build & Push Docker Image
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout mã nguồn
+        uses: actions/checkout@v4
+
+      # SỬA LỖI 2 (Authentication Failed): Sửa lại chính tả tên secret ${{ secrets.REGISTRY_TOKEN }}
+      # (Kèm fallback secrets.GITHUB_TOKEN đảm bảo luôn xác thực thành công khi có quyền packages: write)
+      - name: Đăng nhập vào GitHub Container Registry (Fix Error 2)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.REGISTRY_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Thiết lập Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Chuẩn hóa metadata và tên Image cho GHCR (hỗ trợ lowercase)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+
+      # SỬA LỖI 3 (Build Context Error): Thiết lập context: . và file: ./Dockerfile
+      - name: Đóng gói Dockerfile và Push lên GHCR (Fix Error 3)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
